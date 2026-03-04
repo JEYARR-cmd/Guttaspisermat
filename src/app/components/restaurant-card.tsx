@@ -3,8 +3,10 @@ import { Badge } from "./ui/badge";
 import { Slider } from "./ui/slider";
 import { Label } from "./ui/label";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
-import { ChevronDown, ChevronUp, Calendar, User } from "lucide-react";
+import { ChevronDown, ChevronUp, Calendar, User, Pencil, Check, X } from "lucide-react";
 import { Input } from "./ui/input";
+import { Button } from "./ui/button";
+import { useState } from "react";
 
 export interface Restaurant {
   id: string;
@@ -19,6 +21,10 @@ export interface Restaurant {
       xFaktor: number;
     };
   };
+  lastChange?: {
+    participant: string;
+    timestamp: string;
+  };
 }
 
 interface RestaurantCardProps {
@@ -28,14 +34,17 @@ interface RestaurantCardProps {
   onRatingChange: (restaurantId: string, category: 'verdi' | 'smak' | 'xFaktor', value: number) => void;
   onDateChange: (restaurantId: string, date: string) => void;
   onSaveRating: (restaurantId: string) => void;
+  onNameChange: (restaurantId: string, name: string) => void;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   isSaving?: boolean;
 }
 
-export function RestaurantCard({ restaurant, participants, currentParticipant, onRatingChange, onDateChange, onSaveRating, isOpen, onOpenChange, isSaving }: RestaurantCardProps) {
+export function RestaurantCard({ restaurant, participants, currentParticipant, onRatingChange, onDateChange, onSaveRating, onNameChange, isOpen, onOpenChange, isSaving }: RestaurantCardProps) {
   const currentRatings = restaurant.ratings[currentParticipant] || { verdi: 5, smak: 5, xFaktor: 5 };
   const isDisabled = currentParticipant === 'Ingen';
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState(restaurant.name);
 
   const handleOpenChange = (open: boolean) => {
     // Prevent opening accordion if no participant is selected
@@ -87,7 +96,7 @@ export function RestaurantCard({ restaurant, participants, currentParticipant, o
       </Card>
 
       {/* Restaurant Card */}
-      <Collapsible open={isOpen} onOpenChange={handleOpenChange} className="flex-1 flex">
+      <Collapsible open={isOpen} onOpenChange={handleOpenChange} className="flex-1 flex group">
         <Card className="w-full flex flex-col overflow-hidden">
           <CollapsibleTrigger asChild>
             <CardHeader className={`pb-3 flex-1 ${!isDisabled ? 'cursor-pointer hover:bg-muted/50' : 'cursor-default'} transition-colors`}>
@@ -97,7 +106,74 @@ export function RestaurantCard({ restaurant, participants, currentParticipant, o
                     {userAvg || '—'}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap min-w-0">
-                    <CardTitle className="text-lg">{restaurant.name}</CardTitle>
+                    {!isEditingName ? (
+                      <>
+                        <CardTitle className="text-lg">{restaurant.name}</CardTitle>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsEditingName(true);
+                            setEditedName(restaurant.name);
+                          }}
+                          className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Rediger navn"
+                        >
+                          <Pencil className="size-3" />
+                        </Button>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <Input
+                          type="text"
+                          value={editedName}
+                          onChange={(e) => setEditedName(e.target.value)}
+                          className="h-8 text-lg font-semibold max-w-[250px]"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            e.stopPropagation();
+                            if (e.key === 'Enter') {
+                              setIsEditingName(false);
+                              if (editedName.trim() && editedName !== restaurant.name) {
+                                onNameChange(restaurant.id, editedName.trim());
+                              }
+                            } else if (e.key === 'Escape') {
+                              setIsEditingName(false);
+                              setEditedName(restaurant.name);
+                            }
+                          }}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsEditingName(false);
+                            if (editedName.trim() && editedName !== restaurant.name) {
+                              onNameChange(restaurant.id, editedName.trim());
+                            }
+                          }}
+                          className="h-6 w-6 p-0 text-green-600 hover:text-green-700"
+                          title="Lagre"
+                        >
+                          <Check className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setIsEditingName(false);
+                            setEditedName(restaurant.name);
+                          }}
+                          className="h-6 w-6 p-0 text-red-600 hover:text-red-700"
+                          title="Avbryt"
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      </div>
+                    )}
                     <Badge variant="secondary" className="flex items-center gap-1">
                       <User className="size-3" />
                       {restaurant.responsible}
@@ -191,6 +267,22 @@ export function RestaurantCard({ restaurant, participants, currentParticipant, o
                   </div>
                 </div>
               </div>
+              
+              {/* Change History */}
+              {restaurant.lastChange && (() => {
+                const date = new Date(restaurant.lastChange.timestamp);
+                const dateStr = date.toLocaleDateString('nb-NO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                const timeStr = date.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' });
+                
+                return (
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <Label className="text-xs text-muted-foreground mb-2 block">Endringshistorikk</Label>
+                    <div className="text-xs text-muted-foreground">
+                      Endret av <span className="font-medium text-foreground">{restaurant.lastChange.participant}</span> den {dateStr} kl. {timeStr}
+                    </div>
+                  </div>
+                );
+              })()}
             </CardContent>
           </CollapsibleContent>
         </Card>

@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { RestaurantCard, Restaurant } from "./components/restaurant-card";
-import { AddRestaurantDialog } from "./components/add-restaurant-dialog";
 import { Scoreboard } from "./components/scoreboard";
+import { AddRestaurantDialog } from "./components/add-restaurant-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Label } from "./components/ui/label";
-import { ChefHat, Loader2, Settings } from "lucide-react";
+import { ChefHat, Loader2, Settings, Moon, Sun } from "lucide-react";
 import { projectId, publicAnonKey } from "/utils/supabase/info";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Button } from "./components/ui/button";
@@ -52,14 +52,28 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openAccordionId, setOpenAccordionId] = useState<string | null>(null);
   const [savingRestaurantId, setSavingRestaurantId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    return saved ? JSON.parse(saved) : true; // Default to dark mode
+  });
   
   // Debounce timer for auto-save
   const [saveTimers, setSaveTimers] = useState<Record<string, NodeJS.Timeout>>({});
 
-  // Apply dark mode on mount
+  // Apply dark mode based on state
   useEffect(() => {
-    document.documentElement.classList.add('dark');
-  }, []);
+    if (darkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('darkMode', JSON.stringify(darkMode));
+  }, [darkMode]);
+
+  const toggleDarkMode = () => {
+    setDarkMode(!darkMode);
+  };
 
   // Load restaurants from backend
   useEffect(() => {
@@ -155,6 +169,9 @@ export default function App() {
     setRestaurants(prev => {
       const updated = prev.map(restaurant => {
         if (restaurant.id === restaurantId) {
+          // Check if this is a rating change (not first time rating)
+          const hadPreviousRating = !!restaurant.ratings[currentParticipant];
+          
           const updatedRestaurant = {
             ...restaurant,
             ratings: {
@@ -165,7 +182,12 @@ export default function App() {
                 smak: category === 'smak' ? value : restaurant.ratings[currentParticipant]?.smak ?? 5,
                 xFaktor: category === 'xFaktor' ? value : restaurant.ratings[currentParticipant]?.xFaktor ?? 5,
               }
-            }
+            },
+            // Replace change history if this is a modification (not first time)
+            lastChange: hadPreviousRating ? {
+              participant: currentParticipant,
+              timestamp: new Date().toISOString()
+            } : restaurant.lastChange
           };
           return updatedRestaurant;
         }
@@ -243,6 +265,25 @@ export default function App() {
           const updatedRestaurant = {
             ...restaurant,
             date
+          };
+          updateRestaurantInBackend(updatedRestaurant);
+          return updatedRestaurant;
+        }
+        return restaurant;
+      });
+      // Backup to localStorage
+      localStorage.setItem('restaurants_backup', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleNameChange = (restaurantId: string, name: string) => {
+    setRestaurants(prev => {
+      const updated = prev.map(restaurant => {
+        if (restaurant.id === restaurantId) {
+          const updatedRestaurant = {
+            ...restaurant,
+            name
           };
           updateRestaurantInBackend(updatedRestaurant);
           return updatedRestaurant;
@@ -356,15 +397,28 @@ export default function App() {
   // Calculate participant rankings
   const participantRankings = PARTICIPANTS
     .map(participant => {
-      const participantRestaurants = restaurants.filter(r => r.ratings[participant]);
-      if (participantRestaurants.length === 0) return { name: participant, score: 0, rank: 0 };
+      // Find all restaurants this participant is responsible for
+      const responsibleRestaurants = restaurants.filter(r => r.responsible === participant);
+      if (responsibleRestaurants.length === 0) return { name: participant, score: 0, rank: 0 };
 
-      const avgScore = participantRestaurants.reduce((sum, restaurant) => {
-        const rating = restaurant.ratings[participant];
-        const restaurantAvg = (rating.verdi + rating.smak + rating.xFaktor) / 3;
-        return sum + restaurantAvg;
-      }, 0) / participantRestaurants.length;
+      // Calculate average score across all ratings for those restaurants
+      let totalScore = 0;
+      let totalCount = 0;
 
+      responsibleRestaurants.forEach(restaurant => {
+        const ratings = Object.values(restaurant.ratings);
+        if (ratings.length > 0) {
+          const restaurantAvgScore = ratings.reduce((sum, rating) => {
+            const ratingAvg = (rating.verdi + rating.smak + rating.xFaktor) / 3;
+            return sum + ratingAvg;
+          }, 0) / ratings.length;
+          
+          totalScore += restaurantAvgScore;
+          totalCount++;
+        }
+      });
+
+      const avgScore = totalCount > 0 ? totalScore / totalCount : 0;
       return { name: participant, score: avgScore, rank: 0 };
     })
     .filter(item => item.score > 0)
@@ -435,12 +489,12 @@ export default function App() {
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <ChefHat className="size-8 text-primary" />
-                <h1 className="text-3xl lg:text-4xl font-bold">Guttakrutt spiser mat</h1>
+                <h1 className="text-3xl lg:text-4xl font-bold">Gutta spiser mat 🥩🍲🍰🍺</h1>
               </div>
               <p className="text-muted-foreground">Oslos mest useriøse seriøse restauranttest</p>
             </div>
             <div className="flex items-center gap-3">
-              <Label htmlFor="participant" className="hidden lg:inline">Rangerer som:</Label>
+              <Label htmlFor="participant">Rangerer som:</Label>
               <Select value={currentParticipant} onValueChange={setCurrentParticipant}>
                 <SelectTrigger id="participant" className="w-[180px]">
                   <SelectValue />
@@ -454,7 +508,19 @@ export default function App() {
                   <SelectItem value="Ingen">Ingen</SelectItem>
                 </SelectContent>
               </Select>
-              <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+              <Button 
+                variant="outline" 
+                size="icon" 
+                onClick={toggleDarkMode}
+                title={darkMode ? "Bytt til lyst tema" : "Bytt til mørkt tema"}
+              >
+                {darkMode ? <Sun className="size-4" /> : <Moon className="size-4" />}
+              </Button>
+              <Dialog open={settingsOpen} onOpenChange={(open) => {
+                setSettingsOpen(open);
+                // Reset confirm state when dialog closes
+                if (!open) setConfirmDelete(false);
+              }}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="icon">
                     <Settings className="size-4" />
@@ -468,20 +534,41 @@ export default function App() {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
-                    <Alert className="bg-red-950/20 border border-red-800/50">
-                      <AlertDescription className="text-sm text-red-200">
-                        <p className="font-semibold mb-2">Er du sikker?</p>
-                        <p>Dette vil permanent slette alle rangeringer fra alle deltagere. Denne handlingen kan ikke angres.</p>
-                      </AlertDescription>
-                    </Alert>
+                    {!confirmDelete ? (
+                      <Alert className="bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800/50">
+                        <AlertDescription className="text-sm text-red-900 dark:text-red-200">
+                          <p className="font-semibold mb-2">⚠️ Advarsel!</p>
+                          <p>Dette vil permanent slette alle rangeringer fra alle deltagere. Denne handlingen kan ikke angres.</p>
+                        </AlertDescription>
+                      </Alert>
+                    ) : (
+                      <Alert className="bg-orange-50 dark:bg-orange-950/20 border-orange-300 dark:border-orange-800/50">
+                        <AlertDescription className="text-sm text-orange-900 dark:text-orange-200">
+                          <p className="font-semibold mb-2">⚠️ Er du helt sikker?</p>
+                          <p>Trykk på "Bekreft sletting" én gang til for å slette alle rangeringer permanent.</p>
+                        </AlertDescription>
+                      </Alert>
+                    )}
                   </div>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setSettingsOpen(false)}>
+                    <Button variant="outline" onClick={() => {
+                      setSettingsOpen(false);
+                      setConfirmDelete(false);
+                    }}>
                       Avbryt
                     </Button>
-                    <Button variant="destructive" onClick={handleResetAllRatings}>
-                      Nullstill alle rangeringer
-                    </Button>
+                    {!confirmDelete ? (
+                      <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+                        Nullstill alle rangeringer
+                      </Button>
+                    ) : (
+                      <Button variant="destructive" onClick={() => {
+                        handleResetAllRatings();
+                        setConfirmDelete(false);
+                      }}>
+                        Bekreft sletting
+                      </Button>
+                    )}
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
@@ -495,13 +582,13 @@ export default function App() {
           </div>
         ) : error ? (
           <div className="space-y-4">
-            <div className="bg-destructive/10 border border-destructive text-destructive px-4 py-3 rounded">
+            <div className="bg-red-50 dark:bg-destructive/10 border border-red-300 dark:border-destructive text-red-900 dark:text-destructive px-4 py-3 rounded">
               <p className="font-semibold">Feil ved lasting av data</p>
               <p className="text-sm">{error}</p>
-              <p className="text-xs mt-2 text-muted-foreground">Prøver å bruke lokal lagring i stedet...</p>
+              <p className="text-xs mt-2 text-gray-600 dark:text-muted-foreground">Prøver å bruke lokal lagring i stedet...</p>
             </div>
-            <Alert className="bg-blue-950/20 border border-blue-800/50">
-              <AlertDescription className="text-sm text-blue-200">
+            <Alert className="bg-blue-50 dark:bg-blue-950/20 border-blue-300 dark:border-blue-800/50">
+              <AlertDescription className="text-sm text-blue-900 dark:text-blue-200">
                 💡 Tip: Data fungerer nå, men lagres kun lokalt i nettleseren. 
                 Backend må deployes for permanent lagring på tvers av enheter.
               </AlertDescription>
@@ -545,16 +632,16 @@ export default function App() {
                     </div>
                     {/* Current Participant Info */}
                     {currentParticipant !== 'Ingen' && (
-                      <Alert className="bg-sky-950/20 border border-sky-800/50">
-                        <AlertDescription className="text-sm text-sky-200 inline">
+                      <Alert className="bg-sky-50 dark:bg-sky-950/20 border-sky-300 dark:border-sky-800/50">
+                        <AlertDescription className="text-sm text-sky-900 dark:text-sky-200 inline">
                           Rangerer som: <span className="font-semibold">{currentParticipant}</span>
                         </AlertDescription>
                       </Alert>
                     )}
                     {/* Warning when no participant is selected */}
                     {currentParticipant === 'Ingen' && (
-                      <Alert className="bg-yellow-950/20 border border-yellow-800/50">
-                        <AlertDescription className="text-sm text-yellow-200">
+                      <Alert className="bg-yellow-50 dark:bg-yellow-950/20 border-yellow-300 dark:border-yellow-800/50">
+                        <AlertDescription className="text-sm text-yellow-900 dark:text-yellow-200">
                           Du må velge en bruker for å kunne rangere restauranter
                         </AlertDescription>
                       </Alert>
@@ -569,6 +656,7 @@ export default function App() {
                           onRatingChange={handleRatingChange}
                           onSaveRating={handleSaveRating}
                           onDateChange={handleDateChange}
+                          onNameChange={handleNameChange}
                           isOpen={openAccordionId === restaurant.id}
                           onOpenChange={(open) => setOpenAccordionId(open ? restaurant.id : null)}
                           isSaving={savingRestaurantId === restaurant.id}
@@ -624,16 +712,16 @@ export default function App() {
                 </div>
                 {/* Current Participant Info */}
                 {currentParticipant !== 'Ingen' && (
-                  <Alert className="bg-sky-950/20 border border-sky-800/50">
-                    <AlertDescription className="text-sm text-sky-200 inline">
+                  <Alert className="bg-sky-50 dark:bg-sky-950/20 border-sky-300 dark:border-sky-800/50">
+                    <AlertDescription className="text-sm text-sky-900 dark:text-sky-200 inline">
                       Rangerer som: <span className="font-semibold">{currentParticipant}</span>
                     </AlertDescription>
                   </Alert>
                 )}
                 {/* Warning when no participant is selected */}
                 {currentParticipant === 'Ingen' && (
-                  <Alert className="bg-yellow-950/20 border border-yellow-800/50">
-                    <AlertDescription className="text-sm text-yellow-200">
+                  <Alert className="bg-yellow-50 dark:bg-yellow-950/20 border-yellow-300 dark:border-yellow-800/50">
+                    <AlertDescription className="text-sm text-yellow-900 dark:text-yellow-200">
                       Du må velge en bruker for å kunne rangere restauranter
                     </AlertDescription>
                   </Alert>
@@ -648,6 +736,7 @@ export default function App() {
                       onRatingChange={handleRatingChange}
                       onSaveRating={handleSaveRating}
                       onDateChange={handleDateChange}
+                      onNameChange={handleNameChange}
                       isOpen={openAccordionId === restaurant.id}
                       onOpenChange={(open) => setOpenAccordionId(open ? restaurant.id : null)}
                       isSaving={savingRestaurantId === restaurant.id}
